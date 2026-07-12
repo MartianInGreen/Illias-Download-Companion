@@ -36,6 +36,29 @@ h1 {
   font-size: 12px;
 }
 
+dl {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 18px;
+}
+
+dl div {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  border-bottom: 1px solid rgba(127, 127, 127, 0.3);
+  padding-bottom: 5px;
+}
+
+dt { color: #6b7280; }
+dd { margin: 0; font-weight: 700; text-align: right; }
+
+.error {
+  border-left: 3px solid #b42318;
+  padding-left: 9px;
+  color: #b42318;
+}
+
 button {
   width: 100%;
   border: 0;

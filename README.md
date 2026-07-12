@@ -188,9 +188,16 @@ change; follow the instructions shown by the Add-ons Developer Hub.
 4. Keep Firefox open while PFERD runs. The popup itself may be closed.
 5. Wait for an `OK` badge, then inspect the configured `outputDir`.
 
-The extension passes the active course URL to PFERD. PFERD determines the
-course name and creates or updates its directory below `outputDir`. Subsequent
-clicks synchronize the existing copy.
+The extension passes the active course URL and tab title to the companion. The
+companion creates a stable course directory below `outputDir`; subsequent
+clicks synchronize that copy. The popup shows the number of files currently in
+that directory, when the course was added, and the last successful crawl.
+
+The companion also creates `courses.toml` at the root of `outputDir`. This is a
+human-readable inventory of every saved course, including its URL, directory,
+added date, last attempt, last successful crawl, file count, status, and latest
+error. It is managed automatically and should not be edited while an update is
+running.
 
 ## Configuration
 
@@ -227,7 +234,7 @@ Each profile supports:
 | `name` | Name shown after an update |
 | `origin` | Exact HTTPS origin allowed for this profile |
 | `crawler` | `kit-ilias-web` or `ilias-web` |
-| `outputDir` | Directory into which PFERD synchronizes the course |
+| `outputDir` | Course-library root containing one directory per course and `courses.toml` |
 | `baseUrl` | Generic ILIAS base URL; defaults to `origin` |
 | `clientId` | Client ID for a generic local-login ILIAS installation |
 | `options` | Allowlisted PFERD crawler options and their values |
@@ -266,6 +273,11 @@ Multiple universities can be configured in the same file:
 
 Use absolute output paths when possible. `~` is expanded by the companion, but
 environment variables such as `$HOME` are not expanded.
+
+Earlier versions of the companion passed `outputDir` directly to PFERD. The
+current version creates one subdirectory per course so different courses cannot
+overwrite each other. Existing files directly inside `outputDir` are left in
+place and are not moved automatically.
 
 ### Finding generic ILIAS settings
 
@@ -432,6 +444,15 @@ global option manually.
 This is expected and does not stop the update. The background extension owns
 the native request. Watch the toolbar badge: `OK` means success and `!` means
 the run failed. Only one update can run at a time.
+
+### A failed update leaves PFERD running
+
+The companion starts PFERD in a dedicated process group. On timeout,
+interruption, or native-host failure it first terminates that entire group, then
+force-kills it if necessary, and waits for the process to be reaped before
+reporting the error. A normal nonzero PFERD exit is also reaped. If a PFERD
+process remains after the extension reports failure, record the error and the
+process details because that indicates a bug.
 
 ### A Shibboleth or 2FA login expires
 

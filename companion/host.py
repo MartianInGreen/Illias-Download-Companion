@@ -4,13 +4,18 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from pathlib import Path
+import re
+import signal
 import struct
 import subprocess
 import sys
+import tomllib
 from typing import Any, BinaryIO
-from urllib.parse import urlsplit
+from datetime import datetime, timezone
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 HOST_NAME = "io.github.ilias_download_companion"
 MAX_MESSAGE_SIZE = 1024 * 1024
@@ -99,16 +104,108 @@ def select_profile(config: dict[str, Any], url: str) -> dict[str, Any]:
     raise CompanionError(f"No profile allows {origin}.")
 
 
-def build_command(config: dict[str, Any], profile: dict[str, Any], url: str) -> list[str]:
+def output_root(profile: dict[str, Any]) -> Path:
+    output_dir = profile.get("outputDir")
+    if not isinstance(output_dir, str) or not output_dir:
+        raise CompanionError(f"Profile {profile.get('name', '<unnamed>')!r} needs outputDir.")
+    return Path(output_dir).expanduser()
+
+
+def course_key(url: str) -> str:
+    parsed = urlsplit(url)
+    query = parse_qs(parsed.query)
+    for field in ("target", "ref_id", "obj_id"):
+        if query.get(field):
+            return f"{normalized_origin(url)}:{field}:{query[field][0]}"
+    canonical = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, parsed.query, ""))
+    return canonical
+
+
+def course_directory(root: Path, title: str, key: str) -> Path:
+    clean_title = re.sub(r"\s+[|:-]\s+ILIAS.*$", "", title, flags=re.IGNORECASE)
+    slug = re.sub(r"[^A-Za-z0-9._ -]+", "", clean_title).strip(" ._-")
+    slug = re.sub(r"\s+", "-", slug)[:70] or "course"
+    suffix = hashlib.sha256(key.encode("utf-8")).hexdigest()[:10]
+    return root / f"{slug}-{suffix}"
+
+
+def registry_path(root: Path) -> Path:
+    return root / "courses.toml"
+
+
+def load_registry(root: Path) -> list[dict[str, Any]]:
+    path = registry_path(root)
+    if not path.exists():
+        return []
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise CompanionError(f"Could not read course registry {path}: {error}") from error
+    courses = data.get("courses", [])
+    if not isinstance(courses, list) or not all(isinstance(item, dict) for item in courses):
+        raise CompanionError(f"Course registry {path} has an invalid courses list.")
+    return courses
+
+
+def toml_string(value: Any) -> str:
+    return json.dumps(str(value), ensure_ascii=True)
+
+
+def save_registry(root: Path, courses: list[dict[str, Any]]) -> None:
+    root.mkdir(parents=True, exist_ok=True)
+    lines = ["# Managed by ILIAS Download Companion.\n"]
+    fields = (
+        "id", "title", "url", "directory", "added", "last_attempt",
+        "last_crawled", "file_count", "last_status", "last_error",
+    )
+    for course in sorted(courses, key=lambda item: str(item.get("title", "")).lower()):
+        lines.append("\n[[courses]]\n")
+        for field in fields:
+            if field not in course:
+                continue
+            value = course[field]
+            if field == "file_count":
+                lines.append(f"{field} = {int(value)}\n")
+            else:
+                lines.append(f"{field} = {toml_string(value)}\n")
+    path = registry_path(root)
+    temporary = path.with_suffix(".toml.tmp")
+    temporary.write_text("".join(lines), encoding="utf-8")
+    temporary.replace(path)
+
+
+def find_course(courses: list[dict[str, Any]], key: str) -> dict[str, Any] | None:
+    return next((item for item in courses if item.get("id") == key), None)
+
+
+def public_course(course: dict[str, Any] | None) -> dict[str, Any] | None:
+    if course is None:
+        return None
+    return {field: course.get(field) for field in (
+        "title", "directory", "added", "last_attempt", "last_crawled",
+        "file_count", "last_status", "last_error",
+    ) if field in course}
+
+
+def count_files(path: Path) -> int:
+    if not path.exists():
+        return 0
+    return sum(1 for item in path.rglob("*") if item.is_file())
+
+
+def build_command(
+    config: dict[str, Any],
+    profile: dict[str, Any],
+    url: str,
+    destination: Path | None = None,
+) -> list[str]:
     name = profile.get("name")
     crawler = profile.get("crawler")
-    output_dir = profile.get("outputDir")
     if not isinstance(name, str) or not name.strip():
         raise CompanionError("Every profile needs a non-empty name.")
     if crawler not in ALLOWED_CRAWLERS:
         raise CompanionError(f"Profile {name!r} has an unsupported crawler.")
-    if not isinstance(output_dir, str) or not output_dir:
-        raise CompanionError(f"Profile {name!r} needs outputDir.")
+    root = output_root(profile)
 
     executable = config.get("pferd", "pferd")
     if not isinstance(executable, str) or not executable:
@@ -131,40 +228,126 @@ def build_command(config: dict[str, Any], profile: dict[str, Any], url: str) -> 
         if item.startswith("-") and item.split("=", 1)[0] not in ALLOWED_OPTIONS:
             raise CompanionError(f"PFERD option {item!r} is not allowed.")
     command.extend(options)
-    command.extend([url, str(Path(output_dir).expanduser())])
+    command.extend([url, str(destination or root)])
     return command
 
 
-def update(message: dict[str, Any]) -> dict[str, Any]:
-    if message.get("action") != "update" or not isinstance(message.get("url"), str):
-        raise CompanionError("Expected an update action with a URL.")
-    config = load_config(config_path())
-    profile = select_profile(config, message["url"])
-    command = build_command(config, profile, message["url"])
-    timeout = config.get("timeoutSeconds", 3600)
-    if not isinstance(timeout, int) or timeout < 1:
-        raise CompanionError("timeoutSeconds must be a positive integer.")
-
+def terminate_process(process: subprocess.Popen[str]) -> None:
     try:
-        result = subprocess.run(
+        if process.poll() is not None:
+            process.wait()
+            return
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+            process.wait(timeout=5)
+        except (ProcessLookupError, subprocess.TimeoutExpired):
+            if process.poll() is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            process.wait()
+    finally:
+        if process.stdout is not None:
+            process.stdout.close()
+
+
+def run_pferd(command: list[str], timeout: int) -> tuple[int, str]:
+    try:
+        process = subprocess.Popen(
             command,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            timeout=timeout,
-            check=False,
+            start_new_session=True,
         )
     except FileNotFoundError as error:
         raise CompanionError(f"PFERD executable not found: {command[0]}") from error
+    except OSError as error:
+        raise CompanionError(f"Could not start PFERD: {error}") from error
+    try:
+        output, _ = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired as error:
-        raise CompanionError(f"PFERD timed out after {timeout} seconds.") from error
+        terminate_process(process)
+        raise CompanionError(f"PFERD timed out after {timeout} seconds and was stopped.") from error
+    except BaseException:
+        terminate_process(process)
+        raise
+    process.wait()
+    return process.returncode, output.strip()
 
-    output = result.stdout.strip()
+
+def request_context(message: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], Path, str]:
+    if not isinstance(message.get("url"), str):
+        raise CompanionError("Expected an ILIAS URL.")
+    config = load_config(config_path())
+    profile = select_profile(config, message["url"])
+    root = output_root(profile)
+    return config, profile, root, course_key(message["url"])
+
+
+def status(message: dict[str, Any]) -> dict[str, Any]:
+    _, profile, root, key = request_context(message)
+    course = find_course(load_registry(root), key)
+    return {"ok": True, "profile": profile["name"], "course": public_course(course)}
+
+
+def update(message: dict[str, Any]) -> dict[str, Any]:
+    config, profile, root, key = request_context(message)
+    title = message.get("title")
+    if not isinstance(title, str) or not title.strip():
+        title = "ILIAS course"
+    courses = load_registry(root)
+    course = find_course(courses, key)
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    if course is None:
+        destination = course_directory(root, title, key)
+        course = {
+            "id": key,
+            "title": title.strip(),
+            "url": message["url"],
+            "directory": str(destination),
+            "added": now,
+            "file_count": 0,
+        }
+        courses.append(course)
+    else:
+        destination = Path(str(course["directory"])).expanduser()
+        course["title"] = title.strip()
+        course["url"] = message["url"]
+    course["last_attempt"] = now
+    course["last_status"] = "running"
+    course.pop("last_error", None)
+    save_registry(root, courses)
+
+    try:
+        command = build_command(config, profile, message["url"], destination)
+        timeout = config.get("timeoutSeconds", 3600)
+        if not isinstance(timeout, int) or timeout < 1:
+            raise CompanionError("timeoutSeconds must be a positive integer.")
+        returncode, output = run_pferd(command, timeout)
+    except CompanionError as error:
+        course["last_status"] = "failed"
+        course["last_error"] = str(error)
+        save_registry(root, courses)
+        raise
     summary = output[-4000:]
-    if result.returncode != 0:
-        raise CompanionError(f"PFERD exited with code {result.returncode}.\n{summary}")
-    return {"ok": True, "profile": profile["name"], "summary": summary}
+    if returncode != 0:
+        course["last_status"] = "failed"
+        course["last_error"] = f"PFERD exited with code {returncode}.\n{summary}"
+        save_registry(root, courses)
+        raise CompanionError(course["last_error"])
+    course["last_status"] = "success"
+    course["last_crawled"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    course["file_count"] = count_files(destination)
+    save_registry(root, courses)
+    return {
+        "ok": True,
+        "profile": profile["name"],
+        "summary": summary,
+        "course": public_course(course),
+    }
 
 
 def main() -> int:
@@ -172,7 +355,12 @@ def main() -> int:
         message = read_message(sys.stdin.buffer)
         if message is None:
             return 0
-        response = update(message)
+        if message.get("action") == "update":
+            response = update(message)
+        elif message.get("action") == "status":
+            response = status(message)
+        else:
+            raise CompanionError("Expected an update or status action.")
     except (CompanionError, json.JSONDecodeError, UnicodeDecodeError, ValueError) as error:
         response = {"ok": False, "error": str(error)}
     write_message(sys.stdout.buffer, response)

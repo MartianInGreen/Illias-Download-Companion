@@ -8,7 +8,7 @@ function setBadge(text, color) {
   browser.browserAction.setBadgeBackgroundColor({ color });
 }
 
-async function updateCourse(url) {
+async function updateCourse(url, title) {
   if (currentRun) {
     return { ok: false, error: "An update is already running." };
   }
@@ -16,7 +16,8 @@ async function updateCourse(url) {
   setBadge("...", "#355070");
   currentRun = browser.runtime.sendNativeMessage(HOST_NAME, {
     action: "update",
-    url
+    url,
+    title
   });
 
   try {
@@ -37,7 +38,13 @@ async function updateCourse(url) {
 
 browser.runtime.onMessage.addListener((message) => {
   if (message.action === "update") {
-    return updateCourse(message.url);
+    return updateCourse(message.url, message.title);
+  }
+  if (message.action === "status") {
+    return browser.runtime.sendNativeMessage(HOST_NAME, message).catch((error) => ({
+      ok: false,
+      error: `Could not contact the local companion: ${error.message}`
+    }));
   }
   return undefined;
 });
