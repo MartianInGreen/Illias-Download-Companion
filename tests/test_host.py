@@ -14,6 +14,7 @@ from companion.host import (
     course_directory,
     course_key,
     load_registry,
+    pferd_failure,
     read_message,
     run_pferd,
     save_registry,
@@ -113,6 +114,14 @@ class ProcessTests(unittest.TestCase):
         )
         self.assertEqual(code, 7)
         self.assertEqual(output, "failed")
+
+    def test_password_prompt_gets_actionable_error(self):
+        error = pferd_failure(-9, "GetPassWarning\nPassword: EOFError")
+        self.assertIn("Run the same PFERD command once in a terminal", error)
+        self.assertNotIn("code -9", error)
+
+    def test_signal_exit_is_described_as_signal(self):
+        self.assertIn("signal 9", pferd_failure(-9, "killed"))
 
 
 if __name__ == "__main__":

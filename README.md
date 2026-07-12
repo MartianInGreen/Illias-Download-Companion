@@ -45,6 +45,9 @@ command -v pferd
 Python must be at least 3.11. Keep the path printed by `command -v pferd`; it
 is useful if Firefox cannot find PFERD later.
 
+This step is optional if PFERD is not installed yet: the setup wizard in step 3
+detects that and offers to install it with `pip` automatically.
+
 PFERD can alternatively be installed in a virtual environment:
 
 ```sh
@@ -70,16 +73,32 @@ cd Illias-Download-Companion
 If you already have the project, run the remaining commands from its root
 directory.
 
-### 3. Install the local companion
+### 3. Run the setup wizard
 
-Install the native messaging manifest for your user:
+Run the interactive installer:
 
 ```sh
 python3 companion/install.py
 ```
 
-This does not require root access. It makes `companion/host.py` executable and
-creates the following file:
+The wizard asks for and configures everything required by the companion:
+
+- PFERD executable, with an automatic installation offer when it is missing
+- One or more KIT or generic ILIAS installations
+- ILIAS origin, base URL, and client ID where applicable
+- Course-library output directory
+- Safe non-interactive conflict behavior
+- Credential-file or keyring authentication
+- Maximum update duration
+- Firefox native messaging manifest
+
+Credential-file authentication is the default and works immediately. The
+wizard asks for the password using hidden terminal input, asks for confirmation,
+and writes it to an owner-only file with permission mode `0600`. The password is
+never written to `config.json` or printed to the terminal.
+
+The installer does not require root access. It makes `companion/host.py`
+executable and creates the following native manifest:
 
 | Platform | Native messaging manifest |
 | --- | --- |
@@ -89,27 +108,11 @@ creates the following file:
 If the project is moved later, rerun `python3 companion/install.py` from its new
 location. The installer overwrites only this project's native-host manifest.
 
-### 4. Create the companion configuration
+### 4. Review the generated configuration
 
-Create the companion config:
-
-```sh
-mkdir -p ~/.config/ilias-download-companion
-cp companion/config.example.json ~/.config/ilias-download-companion/config.json
-```
-
-On macOS the same path under your home directory is used. Open
-`~/.config/ilias-download-companion/config.json` in an editor and replace the
-example profiles with your ILIAS installation. Detailed examples are in
-[Configuration](#configuration).
-
-At minimum, change:
-
-- `origin` to the scheme and hostname shown in your ILIAS URL, without a path
-- `crawler` to `kit-ilias-web` for KIT or `ilias-web` elsewhere
-- `outputDir` to the directory in which courses should be stored
-- `your-user-name` to your ILIAS username
-- `pferd` to the absolute executable path if necessary
+The wizard writes `~/.config/ilias-download-companion/config.json`. On macOS
+the same path under your home directory is used. Normally no manual editing is
+needed. Detailed fields and examples are in [Configuration](#configuration).
 
 The file must remain valid JSON. In particular, JSON does not allow comments or
 trailing commas. Validate it with:
@@ -120,11 +123,14 @@ python3 -m json.tool ~/.config/ilias-download-companion/config.json >/dev/null
 
 No output means that the JSON is valid.
 
-### 5. Prepare authentication
+### 5. Confirm authentication
 
-The companion cannot display an interactive password, browser-login, or 2FA
-prompt. PFERD must therefore be able to authenticate non-interactively before
-the extension is used.
+If you selected the recommended credential-file option in the wizard, no
+additional authentication setup is required. The generated profile references
+a file under `~/.config/ilias-download-companion/credentials/`.
+
+If you selected the system keyring, PFERD must be initialized once because the
+companion cannot display an interactive password, browser-login, or 2FA prompt.
 
 For a profile using `--keyring`, open any course in Firefox, copy its full URL,
 and run the equivalent PFERD command in a terminal. For KIT:
@@ -192,6 +198,13 @@ The extension passes the active course URL and tab title to the companion. The
 companion creates a stable course directory below `outputDir`; subsequent
 clicks synchronize that copy. The popup shows the number of files currently in
 that directory, when the course was added, and the last successful crawl.
+
+Update state belongs to the extension background process, not the popup. The
+toolbar displays `RUN`, `OK`, or `!`, and its tooltip contains the current or
+latest result. Closing and reopening the popup preserves the start time,
+duration, running state, file count, and failure details. Firefox also displays
+a desktop notification when PFERD finishes or fails. The completion badge stays
+visible until the next update so the result is not lost after ten seconds.
 
 The companion also creates `courses.toml` at the root of `outputDir`. This is a
 human-readable inventory of every saved course, including its URL, directory,
@@ -351,7 +364,14 @@ chmod 600 ~/.config/pferd/credentials
 ```
 
 Do not combine `--credential-file` with `--keyring` or `--username`. Prefer the
-keyring whenever the ILIAS login method supports it.
+keyring whenever the ILIAS login method supports it. Normally the setup wizard
+creates and protects the credential file for you; these manual details are
+provided for auditing or repairing an existing installation.
+
+To rerun the wizard later, execute `python3 companion/install.py`. It detects an
+existing configuration and asks before replacing it. Choosing not to replace it
+still refreshes the native messaging manifest. For manifest-only automation,
+use `python3 companion/install.py --manifest-only`.
 
 ### Conflict behavior
 
@@ -434,6 +454,12 @@ shows the full error and permits credential or 2FA prompts. Confirm that:
 - `--on-conflict` is non-interactive.
 - The output directory is writable.
 - The selected page is an ILIAS course or supported ILIAS element.
+
+Messages containing `GetPassWarning`, `Password input may be echoed`, or
+`EOFError` mean PFERD tried to ask for a password. Native messaging has no
+terminal, so this cannot succeed from the extension. Initialize `--keyring` in
+a terminal or use `--credential-file`, then run the terminal command again to
+ensure it no longer prompts before retrying the extension.
 
 The popup displays the last 4,000 characters of PFERD's combined output. For
 more detail, reproduce the command in a terminal and add PFERD's `--explain`

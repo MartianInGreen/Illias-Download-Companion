@@ -193,6 +193,27 @@ def count_files(path: Path) -> int:
     return sum(1 for item in path.rglob("*") if item.is_file())
 
 
+def pferd_failure(returncode: int, output: str) -> str:
+    summary = output[-4000:]
+    auth_markers = (
+        "GetPassWarning",
+        "fallback_getpass",
+        "Password input may be echoed",
+        "EOFError",
+    )
+    if any(marker in output for marker in auth_markers):
+        return (
+            "PFERD needs an interactive password, which the Firefox companion "
+            "cannot provide. Run the same PFERD command once in a terminal with "
+            "--keyring to save the password, or configure --credential-file. "
+            "Then verify that command runs a second time without prompting.\n\n"
+            f"PFERD output:\n{summary}"
+        )
+    if returncode < 0:
+        return f"PFERD was terminated by signal {-returncode}.\n{summary}"
+    return f"PFERD exited with code {returncode}.\n{summary}"
+
+
 def build_command(
     config: dict[str, Any],
     profile: dict[str, Any],
@@ -335,7 +356,7 @@ def update(message: dict[str, Any]) -> dict[str, Any]:
     summary = output[-4000:]
     if returncode != 0:
         course["last_status"] = "failed"
-        course["last_error"] = f"PFERD exited with code {returncode}.\n{summary}"
+        course["last_error"] = pferd_failure(returncode, output)
         save_registry(root, courses)
         raise CompanionError(course["last_error"])
     course["last_status"] = "success"
