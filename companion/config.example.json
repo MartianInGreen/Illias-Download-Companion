@@ -1,0 +1,22 @@
+{
+  "pferd": "pferd",
+  "timeoutSeconds": 3600,
+  "profiles": [
+    {
+      "name": "KIT ILIAS",
+      "origin": "https://ilias.studium.kit.edu",
+      "crawler": "kit-ilias-web",
+      "outputDir": "~/study",
+      "options": ["--keyring", "--username", "your-user-name", "--on-conflict", "no-delete"]
+    },
+    {
+      "name": "Example university",
+      "origin": "https://ilias.example.edu",
+      "crawler": "ilias-web",
+      "baseUrl": "https://ilias.example.edu",
+      "clientId": "example-client",
+      "outputDir": "~/study",
+      "options": ["--credential-file", "~/.config/pferd/credentials", "--on-conflict", "no-delete"]
+    }
+  ]
+}

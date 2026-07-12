@@ -1,0 +1,20 @@
+{
+  "manifest_version": 2,
+  "name": "ILIAS Download Companion",
+  "version": "0.1.0",
+  "description": "Update the current ILIAS course with PFERD.",
+  "permissions": ["activeTab", "nativeMessaging", "tabs"],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "browser_action": {
+    "default_title": "Update this ILIAS course",
+    "default_popup": "popup.html"
+  },
+  "applications": {
+    "gecko": {
+      "id": "ilias-download-companion@local",
+      "strict_min_version": "109.0"
+    }
+  }
+}
