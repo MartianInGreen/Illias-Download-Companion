@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "ILIAS Download Companion",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Update the current ILIAS course with PFERD.",
   "permissions": ["activeTab", "nativeMessaging", "notifications", "tabs"],
   "background": {
