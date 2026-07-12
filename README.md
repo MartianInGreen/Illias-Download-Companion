@@ -1,506 +1,186 @@
 # ILIAS Download Companion
 
-A Firefox extension that updates the ILIAS course in the active tab using
-[PFERD](https://github.com/Garmelon/PFERD). A small local Python native
-messaging host connects Firefox to PFERD; no local web server is opened.
+A Firefox extension that updates the ILIAS course in the active tab with
+[PFERD](https://github.com/Garmelon/PFERD). Firefox communicates with a small
+local Python host through Native Messaging; no local server is opened.
 
-## How it works
+## Features
 
-1. Open a course in ILIAS.
-2. Click the extension and select **Update local copy**.
-3. The extension sends the current HTTPS URL to the local companion.
-4. The companion finds the profile for that exact origin and runs PFERD.
-
-PFERD updates the existing destination instead of blindly downloading every
-file again. The extension badge changes to `OK` or `!` when the run finishes.
+- Update the current ILIAS course with one click
+- KIT and generic ILIAS support
+- Separate local directory for every course
+- File count, start time, duration, and last-update status in the popup
+- Persistent `RUN`, `OK`, or `!` toolbar badge and completion notifications
+- Secure credential-file or system-keyring authentication
+- `courses.toml` inventory in each course-library root
+- PFERD process-group termination and reaping after failures or timeouts
 
 ## Requirements
 
 - Firefox 109 or newer
 - Python 3.11 or newer
-- PFERD 3.9 or newer on `PATH`
-- Linux or macOS for the included automatic native-host installer
+- Linux or macOS
+- PFERD 3.9 or newer; the installer can install it with `pip`
 
-## Complete setup
+## Setup
 
-### 1. Install PFERD
-
-Installing PFERD with `pipx` keeps it isolated while still providing a stable
-executable:
-
-```sh
-python3 -m pip install --user pipx
-python3 -m pipx ensurepath
-pipx install PFERD
-```
-
-Open a new terminal after `ensurepath`, then verify both dependencies:
-
-```sh
-python3 --version
-pferd --version
-command -v pferd
-```
-
-Python must be at least 3.11. Keep the path printed by `command -v pferd`; it
-is useful if Firefox cannot find PFERD later.
-
-This step is optional if PFERD is not installed yet: the setup wizard in step 3
-detects that and offers to install it with `pip` automatically.
-
-PFERD can alternatively be installed in a virtual environment:
-
-```sh
-python3 -m venv ~/.local/share/venvs/pferd
-~/.local/share/venvs/pferd/bin/pip install PFERD
-```
-
-If `pferd` is not on Firefox's `PATH`, set its absolute path in the companion
-config. With the virtual-environment example above, that would be
-`"pferd": "/home/alice/.local/share/venvs/pferd/bin/pferd"`.
-
-### 2. Get this project
-
-Clone the repository into a permanent location. Do not move or delete it after
-installing the native host because Firefox's native-host manifest contains the
-absolute path to `companion/host.py`.
+Clone the project into a permanent location and run the setup wizard:
 
 ```sh
 git clone https://github.com/MartianInGreen/Illias-Download-Companion.git
 cd Illias-Download-Companion
-```
-
-If you already have the project, run the remaining commands from its root
-directory.
-
-### 3. Run the setup wizard
-
-Run the interactive installer:
-
-```sh
 python3 companion/install.py
 ```
 
-The wizard asks for and configures everything required by the companion:
+The wizard:
 
-- PFERD executable, with an automatic installation offer when it is missing
-- One or more KIT or generic ILIAS installations
-- ILIAS origin, base URL, and client ID where applicable
-- Course-library output directory
-- Safe non-interactive conflict behavior
-- Credential-file or keyring authentication
-- Maximum update duration
-- Firefox native messaging manifest
+- Finds or installs PFERD
+- Configures one or more ILIAS installations
+- Configures download directories and conflict handling
+- Creates a protected credential file or configures the system keyring
+- Writes `~/.config/ilias-download-companion/config.json`
+- Installs the Firefox native messaging manifest
 
-Credential-file authentication is the default and works immediately. The
-wizard asks for the password using hidden terminal input, asks for confirmation,
-and writes it to an owner-only file with permission mode `0600`. The password is
-never written to `config.json` or printed to the terminal.
-
-The installer does not require root access. It makes `companion/host.py`
-executable and creates the following native manifest:
-
-| Platform | Native messaging manifest |
-| --- | --- |
-| Linux | `~/.mozilla/native-messaging-hosts/io.github.ilias_download_companion.json` |
-| macOS | `~/Library/Application Support/Mozilla/NativeMessagingHosts/io.github.ilias_download_companion.json` |
-
-If the project is moved later, rerun `python3 companion/install.py` from its new
-location. The installer overwrites only this project's native-host manifest.
-
-### 4. Review the generated configuration
-
-The wizard writes `~/.config/ilias-download-companion/config.json`. On macOS
-the same path under your home directory is used. Normally no manual editing is
-needed. Detailed fields and examples are in [Configuration](#configuration).
-
-The file must remain valid JSON. In particular, JSON does not allow comments or
-trailing commas. Validate it with:
+Existing configuration is not replaced without confirmation. To refresh only
+the native manifest, run:
 
 ```sh
-python3 -m json.tool ~/.config/ilias-download-companion/config.json >/dev/null
+python3 companion/install.py --manifest-only
 ```
 
-No output means that the JSON is valid.
+### Load the extension
 
-### 5. Confirm authentication
+For development or local testing:
 
-If you selected the recommended credential-file option in the wizard, no
-additional authentication setup is required. The generated profile references
-a file under `~/.config/ilias-download-companion/credentials/`.
-
-If you selected the system keyring, PFERD must be initialized once because the
-companion cannot display an interactive password, browser-login, or 2FA prompt.
-
-For a profile using `--keyring`, open any course in Firefox, copy its full URL,
-and run the equivalent PFERD command in a terminal. For KIT:
-
-```sh
-pferd kit-ilias-web --keyring --username YOUR_USER \
-  'https://ilias.studium.kit.edu/goto.php?target=crs_123456' \
-  ~/study
-```
-
-For a generic ILIAS installation using local login:
-
-```sh
-pferd ilias-web \
-  --base-url 'https://ilias.example.edu' \
-  --client-id 'example-client' \
-  --keyring \
-  --username YOUR_USER \
-  'https://ilias.example.edu/goto.php?target=crs_123456' \
-  ~/study
-```
-
-Enter credentials and complete any requested login. Run the command a second
-time to confirm it succeeds without asking for a password. If it still prompts,
-see [Authentication choices](#authentication-choices).
-
-### 6. Load the Firefox extension
-
-For an immediate local test, load it as a temporary add-on:
-
-1. Open `about:debugging#/runtime/this-firefox` in Firefox.
+1. Open `about:debugging#/runtime/this-firefox`.
 2. Click **Load Temporary Add-on**.
 3. Select `extension/manifest.json`.
 
-Firefox lists **ILIAS Download Companion** when loading succeeds. Temporary
-add-ons disappear whenever Firefox exits and must then be loaded again.
+Temporary add-ons disappear when Firefox exits. For permanent use, zip the
+contents of `extension/`, request unlisted signing through
+[Mozilla Add-ons](https://addons.mozilla.org/developers/), and install the
+signed `.xpi`. Keep the extension ID `ilias-download-companion@local` because
+the native host permits only that ID.
 
-For permanent use, package the contents of `extension/` and submit the archive
-for signing through [Mozilla Add-ons](https://addons.mozilla.org/developers/).
-The manifest already contains the fixed ID
-`ilias-download-companion@local`, which must not be changed because the native
-host allows only that extension ID.
+Restart Firefox after running the installer or changing native-host settings.
 
-From the project root, a package can be created with:
+## Usage
 
-```sh
-mkdir -p build
-(cd extension && zip -r ../build/ilias-download-companion.zip .)
-```
-
-Upload `build/ilias-download-companion.zip` for unlisted signing. Download the
-signed `.xpi`, open `about:addons`, choose **Install Add-on From File** from the
-gear menu, and select the `.xpi`. Mozilla account and signing requirements can
-change; follow the instructions shown by the Add-ons Developer Hub.
-
-### 7. Perform the first update
-
-1. Open an ILIAS course page whose origin matches a configured profile.
-2. Click the extension icon in Firefox's toolbar.
+1. Open an ILIAS course.
+2. Click the extension icon.
 3. Click **Update local copy**.
-4. Keep Firefox open while PFERD runs. The popup itself may be closed.
-5. Wait for an `OK` badge, then inspect the configured `outputDir`.
 
-The extension passes the active course URL and tab title to the companion. The
-companion creates a stable course directory below `outputDir`; subsequent
-clicks synchronize that copy. The popup shows the number of files currently in
-that directory, when the course was added, and the last successful crawl.
+The popup may be closed while PFERD runs. The toolbar badge shows `RUN`, `OK`,
+or `!`, and Firefox sends a notification when the update finishes. Reopening
+the popup restores the active or latest status and shows:
 
-Update state belongs to the extension background process, not the popup. The
-toolbar displays `RUN`, `OK`, or `!`, and its tooltip contains the current or
-latest result. Closing and reopening the popup preserves the start time,
-duration, running state, file count, and failure details. Firefox also displays
-a desktop notification when PFERD finishes or fails. The completion badge stays
-visible until the next update so the result is not lost after ten seconds.
+- Number of saved files
+- Date added
+- Last successful update
+- Current start time and elapsed duration
+- PFERD errors from the latest failed run
 
-The companion also creates `courses.toml` at the root of `outputDir`. This is a
-human-readable inventory of every saved course, including its URL, directory,
-added date, last attempt, last successful crawl, file count, status, and latest
-error. It is managed automatically and should not be edited while an update is
-running.
+Only one update runs at a time.
 
-## Configuration
+## Authentication
 
-The default path is
-`~/.config/ilias-download-companion/config.json`. Set
-`ILIAS_COMPANION_CONFIG` in Firefox's environment to override it.
-
-```json
-{
-  "pferd": "pferd",
-  "timeoutSeconds": 3600,
-  "profiles": [
-    {
-      "name": "KIT ILIAS",
-      "origin": "https://ilias.studium.kit.edu",
-      "crawler": "kit-ilias-web",
-      "outputDir": "~/study",
-      "options": [
-        "--keyring",
-        "--username",
-        "your-user-name",
-        "--on-conflict",
-        "no-delete"
-      ]
-    }
-  ]
-}
-```
-
-Each profile supports:
-
-| Field | Meaning |
-| --- | --- |
-| `name` | Name shown after an update |
-| `origin` | Exact HTTPS origin allowed for this profile |
-| `crawler` | `kit-ilias-web` or `ilias-web` |
-| `outputDir` | Course-library root containing one directory per course and `courses.toml` |
-| `baseUrl` | Generic ILIAS base URL; defaults to `origin` |
-| `clientId` | Client ID for a generic local-login ILIAS installation |
-| `options` | Allowlisted PFERD crawler options and their values |
-
-`origin` matching is exact. A profile for `https://ilias.example.edu` does not
-allow `http://ilias.example.edu`, `https://login.example.edu`, or any other
-subdomain. Add a separate profile if an installation is legitimately available
-through multiple origins.
-
-Multiple universities can be configured in the same file:
-
-```json
-{
-  "pferd": "/home/alice/.local/bin/pferd",
-  "timeoutSeconds": 3600,
-  "profiles": [
-    {
-      "name": "KIT",
-      "origin": "https://ilias.studium.kit.edu",
-      "crawler": "kit-ilias-web",
-      "outputDir": "/home/alice/Study/KIT",
-      "options": ["--keyring", "--username", "uxxxx", "--on-conflict", "no-delete"]
-    },
-    {
-      "name": "Example University",
-      "origin": "https://ilias.example.edu",
-      "crawler": "ilias-web",
-      "baseUrl": "https://ilias.example.edu",
-      "clientId": "example-client",
-      "outputDir": "/home/alice/Study/Example",
-      "options": ["--keyring", "--username", "alice", "--on-conflict", "no-delete"]
-    }
-  ]
-}
-```
-
-Use absolute output paths when possible. `~` is expanded by the companion, but
-environment variables such as `$HOME` are not expanded.
-
-Earlier versions of the companion passed `outputDir` directly to PFERD. The
-current version creates one subdirectory per course so different courses cannot
-overwrite each other. Existing files directly inside `outputDir` are left in
-place and are not moved automatically.
-
-### Finding generic ILIAS settings
-
-For installations other than KIT, PFERD needs the generic `ilias-web` crawler.
-The `origin` and `baseUrl` are usually the beginning of the login URL. For
-example, given:
+The setup wizard recommends a credential file because Native Messaging cannot
+answer an interactive password or 2FA prompt. It securely creates:
 
 ```text
-https://ilias.example.edu/login.php?client_id=Example&cmd=force_login
+~/.config/ilias-download-companion/credentials/PROFILE.txt
 ```
 
-use:
-
-```json
-"origin": "https://ilias.example.edu",
-"baseUrl": "https://ilias.example.edu",
-"clientId": "Example"
-```
-
-Some installations include a path in their base URL, such as
-`https://example.edu/ilias`. Keep that path in `baseUrl`, but keep `origin` as
-only `https://example.edu`. PFERD's current list of known installations and
-login details is in its
-[configuration documentation](https://github.com/Garmelon/PFERD/blob/master/CONFIG.md#the-ilias-web-crawler).
-
-### Authentication choices
-
-The companion accepts common safe crawler options such as `--keyring`,
-`--username`, `--credential-file`, `--on-conflict`, `--redownload`, `--links`,
-`--videos`, `--forums`, `--tasks`, and `--task-delay`. Arguments are passed
-directly to PFERD without shell interpretation.
-
-Native hosts cannot answer an interactive password or two-factor prompt. The
-recommended setup is PFERD's system keyring:
-
-1. Configure the profile with `--keyring` and `--username`.
-2. Run the equivalent command once in a terminal so PFERD can ask for and save
-   the password, for example:
-
-```sh
-pferd kit-ilias-web --keyring --username YOUR_USER \
-  https://ilias.studium.kit.edu/goto.php?target=crs_123456 \
-  ~/study
-```
-
-After the keyring is populated, extension-triggered runs are non-interactive.
-A credential file also works, but it contains a plaintext password and should
-be readable only by its owner (`chmod 600`). Shibboleth flows or fresh 2FA
-prompts may still require an interactive PFERD run.
-
-To use a credential file, create it with exactly two lines:
+The file uses PFERD's required format and permission mode `0600`:
 
 ```text
-username=YOUR_USER
+username=YOUR_USERNAME
 password=YOUR_PASSWORD
 ```
 
-Then protect it and reference it from the profile:
+The password is never placed in `config.json` or printed by the installer.
 
-```sh
-chmod 600 ~/.config/pferd/credentials
+If you choose the system keyring instead, run the equivalent PFERD command once
+in a terminal. It must run a second time without requesting a password before
+the extension can use it. Messages such as `GetPassWarning` or `EOFError` mean
+PFERD tried to prompt without a terminal.
+
+## Files and configuration
+
+The generated configuration is stored at:
+
+```text
+~/.config/ilias-download-companion/config.json
 ```
 
-```json
-"options": [
-  "--credential-file",
-  "/home/alice/.config/pferd/credentials",
-  "--on-conflict",
-  "no-delete"
-]
+Set `ILIAS_COMPANION_CONFIG` before starting Firefox to use another path.
+`companion/config.example.json` contains a complete example.
+
+Each profile's `outputDir` is a course-library root. The companion creates a
+stable subdirectory for every course and maintains `courses.toml` at the root:
+
+```text
+Study/
+|-- courses.toml
+|-- Linear-Algebra-a1b2c3d4e5/
+`-- Operating-Systems-f6e7d8c9b0/
 ```
 
-Do not combine `--credential-file` with `--keyring` or `--username`. Prefer the
-keyring whenever the ILIAS login method supports it. Normally the setup wizard
-creates and protects the credential file for you; these manual details are
-provided for auditing or repairing an existing installation.
+`courses.toml` records course names, URLs, directories, dates added, attempts,
+successful crawls, file counts, statuses, and errors. It is managed
+automatically.
 
-To rerun the wizard later, execute `python3 companion/install.py`. It detects an
-existing configuration and asks before replacing it. Choosing not to replace it
-still refreshes the native messaging manifest. For manifest-only automation,
-use `python3 companion/install.py --manifest-only`.
-
-### Conflict behavior
-
-PFERD's default conflict mode may ask questions, which does not work from the
-extension. Every profile should explicitly use a non-interactive mode:
-
-- `--on-conflict no-delete` updates remote files but keeps local-only files.
-- `--on-conflict remote-first` makes the local copy follow ILIAS, including
-  deleting files removed remotely.
-- `--on-conflict local-first` preserves local versions when they differ.
-
-`no-delete` is the safest starting point and is used in the examples.
-
-## Updating or uninstalling
-
-After pulling a newer version of this repository, reload the temporary add-on
-from `about:debugging`, or rebuild and reinstall the signed `.xpi`. Rerun the
-companion installer if `companion/host.py` moved:
-
-```sh
-git pull
-python3 companion/install.py
-```
-
-To uninstall, remove the extension in `about:addons`, then remove the native
-manifest and optional configuration:
-
-```sh
-rm ~/.mozilla/native-messaging-hosts/io.github.ilias_download_companion.json
-rm -r ~/.config/ilias-download-companion
-```
-
-On macOS, remove the native manifest from
-`~/Library/Application Support/Mozilla/NativeMessagingHosts/` instead. Removing
-the companion configuration does not delete downloaded courses.
+Existing files directly inside `outputDir` from older versions are not moved.
 
 ## Troubleshooting
 
-### Could not contact the local companion
-
-Rerun the installer and restart Firefox completely:
+**Could not contact the local companion**
 
 ```sh
-python3 companion/install.py
+python3 companion/install.py --manifest-only
 ```
 
-Check that the generated manifest exists and that its `path` points to the
-current `companion/host.py`. Also check that the extension ID in
-`extension/manifest.json` remains `ilias-download-companion@local`.
+Restart Firefox and ensure the project has not moved. Flatpak or Snap Firefox
+packages may restrict Native Messaging; use Mozilla's or your distribution's
+regular Firefox package if necessary.
 
-On Linux, Firefox installed through Flatpak or Snap may be sandboxed away from
-the host manifest or executable. Native messaging support varies by package and
-distribution. If the manifest is correct but Firefox cannot launch it, try the
-Firefox package supplied directly by Mozilla or your distribution.
+**No profile allows this origin**
 
-### Config not found
+Rerun the installer and configure the exact HTTPS origin from the course URL.
+The origin must not contain paths such as `/ilias` or `/login.php`; those belong
+in the generic ILIAS `baseUrl`.
 
-Create `~/.config/ilias-download-companion/config.json` as described above.
-Firefox inherits environment variables only when it starts, so after setting
-`ILIAS_COMPANION_CONFIG`, quit all Firefox processes and reopen it.
+**PFERD asks for a password**
 
-### No profile allows this origin
+Rerun the installer and choose credential-file authentication, or initialize
+the selected keyring by running PFERD in a terminal.
 
-Compare the active tab's address with `origin`. It must use HTTPS and match the
-hostname and optional port exactly. Do not put `/ilias`, `/login.php`, or any
-other path in `origin`; paths belong in `baseUrl`.
+**PFERD executable not found**
 
-### PFERD executable not found
+Rerun the installer. It can install PFERD or save an absolute executable path.
 
-Run `command -v pferd` and copy the resulting absolute path into the top-level
-`pferd` setting. Restart Firefox after changing how PFERD is installed.
+**Update failed**
 
-### PFERD exits with an error or waits for input
-
-Copy the course URL and run the equivalent PFERD command in a terminal. This
-shows the full error and permits credential or 2FA prompts. Confirm that:
-
-- The username, `baseUrl`, and `clientId` are correct.
-- Keyring authentication has been initialized.
-- `--on-conflict` is non-interactive.
-- The output directory is writable.
-- The selected page is an ILIAS course or supported ILIAS element.
-
-Messages containing `GetPassWarning`, `Password input may be echoed`, or
-`EOFError` mean PFERD tried to ask for a password. Native messaging has no
-terminal, so this cannot succeed from the extension. Initialize `--keyring` in
-a terminal or use `--credential-file`, then run the terminal command again to
-ensure it no longer prompts before retrying the extension.
-
-The popup displays the last 4,000 characters of PFERD's combined output. For
-more detail, reproduce the command in a terminal and add PFERD's `--explain`
-global option manually.
-
-### The popup closes while downloading
-
-This is expected and does not stop the update. The background extension owns
-the native request. Watch the toolbar badge: `OK` means success and `!` means
-the run failed. Only one update can run at a time.
-
-### A failed update leaves PFERD running
-
-The companion starts PFERD in a dedicated process group. On timeout,
-interruption, or native-host failure it first terminates that entire group, then
-force-kills it if necessary, and waits for the process to be reaped before
-reporting the error. A normal nonzero PFERD exit is also reaped. If a PFERD
-process remains after the extension reports failure, record the error and the
-process details because that indicates a bug.
-
-### A Shibboleth or 2FA login expires
-
-Run the profile's PFERD command manually in a terminal to complete the login.
-Once it can run without prompting, trigger the course again from Firefox.
-
-## Security
-
-- Only HTTPS URLs whose exact origin appears in a profile are accepted.
-- PFERD is launched as an argument array, never through a shell.
-- The native host is available only to the extension's fixed Firefox ID.
-- Browser cookies and page contents are not sent to the companion.
-- Update output is capped before it is returned to Firefox.
+The popup and `courses.toml` retain the error. PFERD runs in its own process
+group; on timeout or interruption, the companion terminates its children,
+closes its pipes, and reaps it before reporting the failure.
 
 ## Development
 
-Run the host unit tests and validate Python syntax:
-
 ```sh
-python3 -m unittest discover -s tests -v
+python3 -W error::ResourceWarning -m unittest discover -s tests -v
 python3 -m compileall companion tests
+node --check extension/background.js
+node --check extension/popup.js
 ```
 
-The extension uses Manifest V2 because Firefox's non-persistent Manifest V3
-background lifecycle is a poor fit for a long-running native PFERD operation.
+The extension uses Manifest V2 because a persistent background process is
+needed to retain status for long-running PFERD operations.
+
+## Security
+
+- Only configured HTTPS origins are accepted.
+- PFERD is launched without shell interpretation.
+- Credential files are owner-readable only.
+- Browser cookies and page contents are not sent to the companion.
+- The native host is restricted to the extension's fixed Firefox ID.
